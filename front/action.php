@@ -220,6 +220,9 @@ try {
             $filters = array_filter(['status' => $str('status'), 'health' => $str('health'), 'manager' => $int('manager') ?: '', 'from' => $str('from'), 'to' => $str('to')], fn ($v) => $v !== '' && $v !== 0);
             $sid = Report::generate($str('title'), $filters, $str('cutoff'));
             $message = 'Relatório gerado (snapshot #' . $sid . ').';
+            if (!empty($p['executive'])) {
+                $return = '/front/download.php?id=' . $sid . '&format=executive'; // gera e já baixa o PDF executivo completo
+            }
             break;
         case 'inbox_read':
             Outbox::markRead((int) Session::getLoginUserID());

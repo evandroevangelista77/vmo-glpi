@@ -66,6 +66,7 @@ class Report
                 'manager' => Db::userName((int) $r['users_id_manager']), 'sponsor' => Db::userName((int) $r['users_id_sponsor']),
                 'planned_start' => $r['planned_start'], 'planned_end' => $r['planned_end'], 'forecast_end' => $r['forecast_end'],
                 'progress' => $m['progress'], 'delay' => $m['delay'], 'health' => $m['health'], 'max_risk' => $m['max_risk'], 'currency' => $cur,
+                'tasks' => $m['tasks'], 'late_tasks' => $m['late_tasks'],
             ];
             if ($finance) {
                 $row += ['budget' => $m['budget'], 'forecast' => $m['forecast'], 'actual' => $m['actual'],
@@ -119,6 +120,89 @@ class Report
         return compact('risks', 'decisions', 'milestones');
     }
 
+    /**
+     * Conteúdo extra do relatório executivo completo: fichas das iniciativas, custo por categoria, benefícios e
+     * indicadores. Cada bloco é independente: se um falhar, os demais continuam e o relatório sai sem ele.
+     */
+    public static function rich(array $ids, bool $finance, string $cutoff): array
+    {
+        global $DB;
+        $out = ['details' => [], 'costs_cat' => [], 'benefits' => [], 'indicators' => []];
+        if (!$ids) {
+            return $out;
+        }
+        try {
+            foreach (Db::rows('initiatives', ['id' => $ids]) as $r) {
+                $out['details'][(int) $r['id']] = ['objective' => Db::text($r['objective'] ?? '', 420), 'description' => Db::text($r['description'] ?? '', 420),
+                    'priority' => (int) ($r['priority'] ?? 0)];
+            }
+        } catch (\Throwable $e) {
+            // sem fichas detalhadas
+        }
+        if ($finance) {
+            try {
+                foreach ($DB->request(['SELECT' => ['category', 'cost_type', 'kind', 'currency', new \Glpi\DBAL\QueryExpression('SUM(`amount`) AS `total`')], 'FROM' => Db::t('costs'),
+                    'WHERE' => ['initiatives_id' => $ids, 'competence_date' => ['<=', $cutoff]], 'GROUPBY' => ['category', 'cost_type', 'kind', 'currency']]) as $c) {
+                    $out['costs_cat'][] = ['category' => (string) $c['category'], 'cost_type' => (string) $c['cost_type'], 'kind' => (string) $c['kind'],
+                        'currency' => (string) $c['currency'], 'total' => round((float) $c['total'], 2)];
+                }
+            } catch (\Throwable $e) {
+                // sem custo por categoria
+            }
+        }
+        try {
+            $codes = [];
+            foreach (Db::rows('initiatives', ['id' => $ids]) as $r) {
+                $codes[(int) $r['id']] = $r['code'];
+            }
+            $byBenefit = [];
+            foreach (Db::rows('allocations', ['initiatives_id' => $ids]) as $a) {
+                if (!empty($a['benefits_id'])) {
+                    $byBenefit[(int) $a['benefits_id']][] = $codes[(int) $a['initiatives_id']] ?? '';
+                }
+            }
+            foreach (Benefit::visible() as $b) {
+                $bid = (int) $b['id'];
+                if (!isset($byBenefit[$bid])) {
+                    continue;
+                }
+                $current = null;
+                try {
+                    $m = Db::rows('measurements', ['benefits_id' => $bid, 'status' => 'validated'], ['period DESC'], 1)[0] ?? null;
+                    $current = $m ? ($m['observed_value'] ?? null) : null;
+                } catch (\Throwable $e) {
+                    $current = null;
+                }
+                $base = $b['baseline_value'] ?? null;
+                $target = $b['target'] ?? null;
+                $out['benefits'][] = [
+                    'name' => (string) $b['name'], 'type' => Benefit::TYPES[$b['type']] ?? (string) $b['type'], 'status' => Benefit::STATUSES[$b['status']][0] ?? (string) $b['status'],
+                    'owner' => Db::userName((int) $b['users_id_owner']), 'baseline' => $base, 'target' => $target, 'current' => $current,
+                    'progress' => $b['type'] === 'nonfinancial' && $current !== null
+                        ? Calc::goalProgress((float) $current, $base !== null ? (float) $base : null, $target !== null ? (float) $target : null, (string) ($b['direction'] ?? 'increase')) : null,
+                    'initiatives' => implode(', ', array_slice(array_unique($byBenefit[$bid]), 0, 3)),
+                ];
+            }
+        } catch (\Throwable $e) {
+            // sem benefícios
+        }
+        try {
+            foreach (Indicator::visible() as $i) {
+                if ((int) $i['initiatives_id'] > 0 && !in_array((int) $i['initiatives_id'], $ids, true)) {
+                    continue;
+                }
+                $st = Indicator::state($i, $cutoff);
+                $out['indicators'][] = [
+                    'name' => (string) $i['name'], 'unit' => (string) $i['unit'], 'baseline' => $i['baseline_value'] ?? null, 'target' => $i['target'] ?? null,
+                    'value' => $st['value'], 'progress' => $st['progress'], 'last' => $st['last'], 'label' => $st['label'],
+                ];
+            }
+        } catch (\Throwable $e) {
+            // sem indicadores
+        }
+        return $out;
+    }
+
     // ---------- snapshot ----------
 
     public static function generate(string $title, array $filters, ?string $cutoff = null): int
@@ -142,7 +226,7 @@ class Report
             'finance' => $data['finance'],
             'totals' => $data['totals'],
             'rows' => $data['rows'],
-        ] + self::extras($ids);
+        ] + self::extras($ids) + self::rich($ids, (bool) $data['finance'], $cutoff);
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
         $id = Db::insert('snapshots', [
             'entities_id' => (int) ($_SESSION['glpiactive_entity'] ?? 0), 'users_id' => (int) Session::getLoginUserID(), 'title' => $payload['title'],
@@ -178,6 +262,7 @@ class Report
                 }
             }
             unset($row);
+            $p['costs_cat'] = [];
         }
         // linhas de iniciativas que o usuário não enxerga mais saem do arquivo
         $p['rows'] = array_values(array_filter($p['rows'], function ($r) {

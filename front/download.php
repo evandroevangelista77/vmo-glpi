@@ -32,6 +32,11 @@ switch ($format) {
         header('Content-Disposition: attachment; filename="' . $name . '.csv"');
         echo Report::csv($d);
         break;
+    case 'executive':
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: attachment; filename="' . $name . '-executivo-completo.pdf"');
+        echo \GlpiPlugin\Vmo\ExecutiveReport::pdf($d);
+        break;
     case 'docx':
         header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         header('Content-Disposition: attachment; filename="' . $name . '.docx"');

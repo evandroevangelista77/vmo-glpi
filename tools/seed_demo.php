@@ -167,4 +167,115 @@ foreach ([[-90, 41], [-60, 44], [-30, 48]] as [$off, $v]) {
 }
 $ix2 = Indicator::save(0, ['code' => 'IND-N1', 'name' => '[Demo] % de chamados resolvidos no N1', 'unit' => '%', 'direction' => 'increase', 'baseline_value' => '55', 'target' => '75', 'cadence_days' => 30, 'initiatives_id' => $a, 'users_id_owner' => $tech]);
 
-echo "Dados de demonstração criados: 3 iniciativas ([Demo] Automação do atendimento N1, Migração para nuvem, Pesquisa de satisfação), 2 benefícios, 2 indicadores, catálogos e departamentos.\n";
+// ------------------------------------------------------------------ D: ERP financeiro (em execução, CRÍTICA: atraso, estouro de custo e risco alto)
+$dd = Initiative::create(['name' => '[Demo] Implantação do ERP financeiro', 'description' => 'Substituir o sistema financeiro legado por um ERP integrado a compras e fiscal.',
+    'problem' => 'Fechamento contábil manual e demorado, com retrabalho entre áreas.', 'objective' => 'Fechar o mês em 3 dias úteis e eliminar planilhas paralelas.', 'justification' => 'Risco fiscal e custo de retrabalho.',
+    'business_case' => 'Investimento de R$ 300 mil, retorno de R$ 20 mil/mês em retrabalho evitado.', 'catalogs_id_objective' => $oe1, 'catalogs_id_category' => $cat1, 'priority' => 5,
+    'users_id_manager' => $normal, 'users_id_sponsor' => $tech, 'planned_start' => $d(-150), 'planned_end' => $d(30), 'forecast_end' => $d(30), 'currency' => 'BRL']);
+Department::associate($dd, $fin, 'executor', '70', $normal);
+Department::associate($dd, $ti, 'executor', '30', $tech);
+foreach ([['Licenças do ERP', 'capex', 140000], ['Consultoria de implantação', 'opex', 110000], ['Migração de dados', 'opex', 50000]] as [$cat, $type, $v]) {
+    Cost::add($dd, ['kind' => 'forecast', 'amount' => (string) $v, 'competence_date' => $d(-145), 'category' => $cat, 'cost_type' => $type, 'description' => "Previsão: $cat"]);
+}
+$approve($dd);
+Initiative::transition($dd, 'running');
+$DB->update(Db::t('initiatives'), ['actual_start' => $d(-148)], ['id' => $dd]);
+$dt1 = Task::save($dd, 0, ['name' => 'Levantamento de requisitos fiscais', 'weight' => '2', 'users_id_responsible' => $normal, 'planned_start' => $d(-148), 'planned_end' => $d(-110)]);
+$dt2 = Task::save($dd, 0, ['name' => 'Parametrização do plano de contas', 'weight' => '3', 'users_id_responsible' => $normal, 'planned_start' => $d(-110), 'planned_end' => $d(-60)]);
+$dt3 = Task::save($dd, 0, ['name' => 'Migração dos dados históricos', 'weight' => '4', 'users_id_responsible' => $tech, 'planned_start' => $d(-60), 'planned_end' => $d(-5)]);
+$dt4 = Task::save($dd, 0, ['name' => 'Testes integrados e homologação', 'weight' => '3', 'users_id_responsible' => $normal, 'planned_start' => $d(-5), 'planned_end' => $d(20)]);
+$dt5 = Task::save($dd, 0, ['name' => 'Virada para produção', 'weight' => '0', 'is_milestone' => 1, 'users_id_responsible' => $tech, 'planned_start' => $d(30), 'planned_end' => $d(30)]);
+Dependency::add('task', $dt3, $dt4, 0, true);
+Dependency::add('task', $dt4, $dt5, 0, true);
+foreach ([$dt1, $dt2] as $t) {
+    Task::addProgress($t, ['progress' => '100', 'reference_date' => $d(-50), 'comment' => 'Concluído'], (int) Db::row('tasks', $t)['version']);
+}
+Task::addProgress($dt3, ['progress' => '45', 'effort_delta' => '60', 'comment' => 'Qualidade dos dados históricos exigiu limpeza adicional'], (int) Db::row('tasks', $dt3)['version']);
+foreach ([[-120, 60000], [-70, 85000], [-20, 70000]] as [$off, $v]) {
+    Cost::add($dd, ['kind' => 'actual', 'amount' => (string) $v, 'competence_date' => $d($off), 'category' => 'Consultoria de implantação', 'cost_type' => 'opex', 'description' => 'Lançamento real', 'source' => 'erp', 'external_key' => 'DEMO-D-' . abs($off)]);
+}
+Cost::add($dd, ['kind' => 'forecast', 'amount' => '95000', 'competence_date' => $d(-10), 'category' => 'Consultoria de implantação', 'cost_type' => 'opex', 'description' => 'Reforço de consultoria para a limpeza de dados']);
+Risk::save($dd, 0, ['title' => 'Qualidade dos dados históricos compromete a virada', 'probability' => 5, 'impact' => 4, 'response' => 'Força-tarefa de saneamento e congelamento de lançamentos', 'users_id_owner' => $normal, 'due_date' => $d(15)]);
+Risk::save($dd, 0, ['title' => 'Dependência de um único consultor sênior', 'probability' => 3, 'impact' => 4, 'users_id_owner' => $tech]);
+Risk::decide($dd, 'Aprovar reforço de consultoria', 'Comitê aprovou R$ 95 mil adicionais para sanear os dados e proteger a data de virada.');
+$DB->update(Db::t('initiatives'), ['forecast_end' => $d(78)], ['id' => $dd]); // virada atrasa em relação à baseline
+$bd = Benefit::save(0, ['name' => '[Demo] Retrabalho evitado no fechamento contábil', 'type' => 'financial', 'currency' => 'BRL', 'horizon_start' => date('Y-m-01', strtotime('+2 months')), 'horizon_end' => $d(420),
+    'users_id_owner' => $normal, 'users_id_validator' => $other, 'source' => 'Apontamento de horas da contabilidade', 'method' => 'Horas evitadas × custo-hora médio', 'unit' => 'R$']);
+$DB->update(Db::t('benefits'), ['users_id_author' => $tech], ['id' => $bd]);
+Benefit::allocate($bd, $dd, '100');
+Benefit::approve($bd);
+for ($m = 2; $m <= 12; $m++) { // plano dentro do horizonte (começa daqui a 2 meses)
+    Benefit::setPlan($bd, date('Y-m', strtotime("+$m months")), '20000');
+}
+
+// ------------------------------------------------------------------ E: Segurança da informação (em execução, NO PRAZO)
+$e = Initiative::create(['name' => '[Demo] Programa de segurança da informação', 'description' => 'MFA corporativo, gestão de vulnerabilidades e treinamento anual de conscientização.',
+    'problem' => 'Exposição a phishing e contas sem segundo fator.', 'objective' => 'Cobrir 100% dos usuários com MFA e reduzir incidentes de phishing em 60%.', 'justification' => 'Exigência de clientes e auditoria.',
+    'business_case' => 'Investimento de R$ 150 mil contra perdas potenciais muito superiores.', 'catalogs_id_objective' => $oe2, 'catalogs_id_category' => $cat2, 'priority' => 4,
+    'users_id_manager' => $tech, 'users_id_sponsor' => $normal, 'planned_start' => $d(-90), 'planned_end' => $d(75), 'forecast_end' => $d(75), 'currency' => 'BRL']);
+Department::associate($e, $ti, 'executor', '100', $tech);
+foreach ([['Licenças MFA e EDR', 'opex', 90000], ['Treinamentos', 'opex', 35000], ['Testes de invasão', 'opex', 25000]] as [$cat, $type, $v]) {
+    Cost::add($e, ['kind' => 'forecast', 'amount' => (string) $v, 'competence_date' => $d(-85), 'category' => $cat, 'cost_type' => $type, 'description' => "Previsão: $cat"]);
+}
+$approve($e);
+Initiative::transition($e, 'running');
+$DB->update(Db::t('initiatives'), ['actual_start' => $d(-88)], ['id' => $e]);
+$et1 = Task::save($e, 0, ['name' => 'Implantar MFA para todos os usuários', 'weight' => '4', 'users_id_responsible' => $tech, 'planned_start' => $d(-88), 'planned_end' => $d(-30)]);
+$et2 = Task::save($e, 0, ['name' => 'Implantar EDR nas estações', 'weight' => '3', 'users_id_responsible' => $tech, 'planned_start' => $d(-60), 'planned_end' => $d(10)]);
+$et3 = Task::save($e, 0, ['name' => 'Campanha de conscientização', 'weight' => '2', 'users_id_responsible' => $normal, 'planned_start' => $d(-30), 'planned_end' => $d(30)]);
+$et4 = Task::save($e, 0, ['name' => 'Teste de invasão externo', 'weight' => '1', 'is_milestone' => 1, 'users_id_responsible' => $tech, 'planned_start' => $d(60), 'planned_end' => $d(60)]);
+Task::addProgress($et1, ['progress' => '100', 'reference_date' => $d(-28), 'comment' => 'MFA em 100% dos usuários'], (int) Db::row('tasks', $et1)['version']);
+Task::addProgress($et2, ['progress' => '80', 'effort_delta' => '30', 'comment' => 'Faltam as estações remotas'], (int) Db::row('tasks', $et2)['version']);
+Task::addProgress($et3, ['progress' => '50', 'comment' => 'Duas de quatro turmas concluídas'], (int) Db::row('tasks', $et3)['version']);
+foreach ([[-70, 30000], [-35, 28000], [-8, 12000]] as [$off, $v]) {
+    Cost::add($e, ['kind' => 'actual', 'amount' => (string) $v, 'competence_date' => $d($off), 'category' => 'Licenças MFA e EDR', 'cost_type' => 'opex', 'description' => 'Lançamento real', 'source' => 'erp', 'external_key' => 'DEMO-E-' . abs($off)]);
+}
+Risk::save($e, 0, ['title' => 'Resistência dos usuários ao segundo fator', 'probability' => 2, 'impact' => 2, 'response' => 'Comunicação interna e suporte no primeiro mês', 'users_id_owner' => $tech]);
+$ix3 = Indicator::save(0, ['code' => 'IND-MFA', 'name' => '[Demo] % de usuários com MFA ativo', 'unit' => '%', 'direction' => 'increase', 'baseline_value' => '20', 'target' => '100', 'cadence_days' => 30,
+    'initiatives_id' => $e, 'users_id_owner' => $tech, 'source' => 'Console de identidade']);
+foreach ([[-80, 25], [-50, 70], [-20, 100]] as [$off, $v]) {
+    Indicator::addValue($ix3, $d($off), (string) $v);
+}
+
+// ------------------------------------------------------------------ F: Renovação do parque de notebooks (entregue, benefício validado)
+$f = Initiative::create(['name' => '[Demo] Renovação do parque de notebooks', 'description' => 'Troca de 120 notebooks com mais de 5 anos.', 'objective' => 'Reduzir chamados de hardware e tempo parado.',
+    'catalogs_id_objective' => $oe1, 'catalogs_id_category' => $cat2, 'priority' => 3, 'users_id_manager' => $other, 'users_id_sponsor' => $normal,
+    'planned_start' => $d(-200), 'planned_end' => $d(-40), 'forecast_end' => $d(-40), 'currency' => 'BRL']);
+Cost::add($f, ['kind' => 'forecast', 'amount' => '420000', 'competence_date' => $d(-195), 'category' => 'Equipamentos', 'cost_type' => 'capex', 'description' => 'Previsão: 120 notebooks']);
+$approve($f);
+Initiative::transition($f, 'running');
+$ft = Task::save($f, 0, ['name' => 'Compra e entrega dos equipamentos', 'weight' => '1', 'users_id_responsible' => $other, 'planned_end' => $d(-60)]);
+Task::addProgress($ft, ['progress' => '100', 'reference_date' => $d(-45), 'comment' => 'Entrega concluída'], (int) Db::row('tasks', $ft)['version']);
+Cost::add($f, ['kind' => 'actual', 'amount' => '405000', 'competence_date' => $d(-50), 'category' => 'Equipamentos', 'cost_type' => 'capex', 'description' => 'Lançamento real', 'source' => 'erp', 'external_key' => 'DEMO-F-50']);
+Initiative::transition($f, 'delivered');
+Initiative::transition($f, 'measuring');
+$bf2 = Benefit::save(0, ['name' => '[Demo] Redução de chamados de hardware', 'type' => 'financial', 'currency' => 'BRL', 'horizon_start' => date('Y-m-01', strtotime('-5 months')), 'horizon_end' => $d(240),
+    'users_id_owner' => $other, 'users_id_validator' => $normal, 'source' => 'Chamados de hardware do GLPI', 'method' => 'Chamados evitados × custo médio por chamado', 'unit' => 'R$']);
+$DB->update(Db::t('benefits'), ['users_id_author' => $tech], ['id' => $bf2]);
+Benefit::allocate($bf2, $f, '100');
+Benefit::approve($bf2);
+for ($m = 5; $m >= -2; $m--) {
+    Benefit::setPlan($bf2, date('Y-m', strtotime("-$m months")), '12000');
+}
+foreach ([5, 4, 3, 2] as $m) {
+    $mid = Measurement::declare($bf2, ['period' => date('Y-m', strtotime("-$m months")), 'declared_amount' => (string) (11000 + $m * 300), 'evidence' => 'Relatório de chamados ' . date('m/Y', strtotime("-$m months"))]);
+    $DB->update(Db::t('measurements'), ['users_id_author' => $other], ['id' => $mid]);
+    Measurement::decide($mid, 'validated', 'Conferido contra o GLPI');
+}
+
+// ------------------------------------------------------------------ G: Portal do cliente (suspensa, aguardando orçamento)
+$g = Initiative::create(['name' => '[Demo] Portal de autoatendimento do cliente', 'description' => 'Portal para abertura e acompanhamento de chamados pelo cliente.', 'objective' => 'Reduzir ligações ao suporte em 30%.',
+    'catalogs_id_objective' => $oe2, 'catalogs_id_category' => $cat1, 'priority' => 3, 'users_id_manager' => $normal, 'users_id_sponsor' => $tech,
+    'planned_start' => $d(-60), 'planned_end' => $d(150), 'forecast_end' => $d(150), 'currency' => 'BRL']);
+Cost::add($g, ['kind' => 'forecast', 'amount' => '180000', 'competence_date' => $d(-55), 'category' => 'Desenvolvimento', 'cost_type' => 'capex', 'description' => 'Previsão: desenvolvimento do portal']);
+Risk::save($g, 0, ['title' => 'Orçamento do ano ainda não liberado', 'probability' => 4, 'impact' => 3, 'users_id_owner' => $normal]);
+$approve($g);
+Initiative::transition($g, 'running');
+Initiative::transition($g, 'suspended', 'Aguardando liberação do orçamento do próximo ciclo.');
+
+// ------------------------------------------------------------------ H: Programa de IA generativa (rascunho)
+Initiative::create(['name' => '[Demo] Programa de IA generativa no atendimento', 'description' => 'Avaliar assistentes de IA para apoiar os analistas de suporte.', 'objective' => 'Reduzir o tempo médio de resolução.',
+    'catalogs_id_objective' => $oe1, 'catalogs_id_category' => $cat1, 'priority' => 2, 'users_id_manager' => $tech, 'users_id_sponsor' => $normal,
+    'planned_start' => $d(45), 'planned_end' => $d(240), 'currency' => 'BRL']);
+
+echo "Dados de demonstração criados: 8 iniciativas (críticas, no prazo, entregue, suspensa e rascunho), 4 benefícios, 3 indicadores, catálogos e departamentos.\n";
